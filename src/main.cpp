@@ -39,6 +39,8 @@ String wifiSSID = "LAN_Party_Arcade";
 String wifiPassword = "";
 int maxConnections = 20;
 String actualSSID = "";
+String hostname = "play"; // Default hostname for mDNS
+String headerBMP = "Header.bmp"; // Default header image filename
 int currentScreen = 0; // 0 = connection info, 1 = system stats
 
 // Function declarations
@@ -146,10 +148,10 @@ void setup() {
   
   // Start mDNS responder
   Serial.println("\n--- Starting mDNS ---");
-  if (MDNS.begin("play")) {
+  if (MDNS.begin(hostname.c_str())) {
     MDNS.addService("http", "tcp", 80);
     Serial.println("mDNS responder started");
-    Serial.println("Access at: http://play.local");
+    Serial.printf("Access at: http://%s.local\n", hostname.c_str());
   } else {
     Serial.println("Error setting up mDNS responder!");
   }
@@ -189,16 +191,6 @@ void loop() {
   uint16_t touchX = 0, touchY = 0;
   
   bool isTouched = tft.getTouch(&touchX, &touchY);
-  
-  // Debug: periodically check touch status
-  static unsigned long lastDebug = 0;
-  if (millis() - lastDebug > 5000) {
-    lastDebug = millis();
-    Serial.printf("Touch check: %s\n", isTouched ? "TOUCHED" : "not touched");
-    if (isTouched) {
-      Serial.printf("  Coordinates: (%d, %d)\n", touchX, touchY);
-    }
-  }
   
   // Detect touch press (rising edge)
   if (isTouched && !wasTouched && (millis() - lastTouchTime > 500)) {
@@ -271,6 +263,14 @@ void loadConfig() {
         if (doc["maxConnections"].is<int>()) {
           maxConnections = doc["maxConnections"];
           Serial.printf("  Max connections: %d\n", maxConnections);
+        }
+        if (doc["hostname"].is<String>()) {
+          hostname = doc["hostname"].as<String>();
+          Serial.printf("  Hostname: %s.local\n", hostname.c_str());
+        }
+        if (doc["headerBMP"].is<String>()) {
+          headerBMP = doc["headerBMP"].as<String>();
+          Serial.printf("  Header BMP: %s\n", headerBMP.c_str());
         }
       } else {
         Serial.printf("JSON parse error: %s\n", error.c_str());
@@ -346,6 +346,58 @@ void startWiFiAP() {
   }
 }
 
+// BMP image loader from SD card
+void drawBmpFromSD(const char* filename, int16_t x, int16_t y) {
+  File bmpFile = SD.open(filename);
+  if (!bmpFile) {
+    Serial.printf("Failed to open %s\n", filename);
+    return;
+  }
+  
+  // Read BMP header (simple 24-bit uncompressed BMP reader)
+  if (bmpFile.read() != 'B' || bmpFile.read() != 'M') {
+    Serial.println("Not a BMP file");
+    bmpFile.close();
+    return;
+  }
+  
+  bmpFile.seek(10);
+  uint32_t dataOffset = bmpFile.read() | (bmpFile.read() << 8) | (bmpFile.read() << 16) | (bmpFile.read() << 24);
+  
+  bmpFile.seek(18);
+  int32_t width = bmpFile.read() | (bmpFile.read() << 8) | (bmpFile.read() << 16) | (bmpFile.read() << 24);
+  int32_t height = bmpFile.read() | (bmpFile.read() << 8) | (bmpFile.read() << 16) | (bmpFile.read() << 24);
+  
+  bmpFile.seek(28);
+  uint16_t depth = bmpFile.read() | (bmpFile.read() << 8);
+  
+  if (depth != 24) {
+    Serial.printf("Unsupported bit depth: %d (need 24-bit BMP)\n", depth);
+    bmpFile.close();
+    return;
+  }
+  
+  // BMPs are stored bottom-to-top
+  uint32_t rowSize = ((width * 3 + 3) & ~3); // Row size padded to 4 bytes
+  uint8_t row[rowSize];
+  
+  bmpFile.seek(dataOffset);
+  for (int row_idx = height - 1; row_idx >= 0; row_idx--) {
+    bmpFile.seek(dataOffset + row_idx * rowSize);
+    bmpFile.read(row, rowSize);
+    
+    for (int col = 0; col < width; col++) {
+      uint8_t b = row[col * 3];
+      uint8_t g = row[col * 3 + 1];
+      uint8_t r = row[col * 3 + 2];
+      uint16_t color = tft.color565(r, g, b);
+      tft.drawPixel(x + col, y + (height - 1 - row_idx), color);
+    }
+  }
+  
+  bmpFile.close();
+}
+
 // Update display with connection information
 void updateDisplay() {
   showConnectionScreen();
@@ -356,115 +408,133 @@ void showConnectionScreen() {
   // Clear screen
   tft.fillScreen(TFT_BLACK);
   
-  // Header
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(20, 10);
-  tft.println("JOIN GAME");
+  // Draw logo if available (200x64, centered at top)
+  int headerY = 10;
+  String headerPath = "/" + headerBMP;
+  if (SD.exists(headerPath.c_str())) {
+    int logoX = (240 - 200) / 2; // Center horizontally (20px)
+    drawBmpFromSD(headerPath.c_str(), logoX, 5);
+    headerY = 75; // Move content below logo
+  } else {
+    // Fallback text header if no logo
+    tft.setTextColor(TFT_CYAN, TFT_BLACK);
+    tft.setTextSize(2);
+    tft.setCursor(20, 10);
+    tft.println("JOIN GAME");
+    headerY = 35;
+  }
   
   // Draw separator
-  tft.drawLine(10, 35, 230, 35, TFT_CYAN);
+  tft.drawLine(10, headerY, 230, headerY, TFT_CYAN);
+  headerY += 5;
   
-  // WiFi QR Code
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
+  // ========== QR CODE 1: WiFi Connection ==========
+  tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.setTextSize(1);
-  tft.setCursor(10, 45);
-  tft.println("1. Scan QR Code:");
+  tft.setCursor(15, headerY);
+  tft.println("1. Join WiFi");
+  headerY += 17; // Space after label (12 + 5 extra)
   
   // Generate WiFi QR code
-  String qrData = "WIFI:T:";
-  qrData += (wifiPassword.length() > 0) ? "WPA" : "nopass";
-  qrData += ";S:" + actualSSID + ";";
+  String qrDataWifi = "WIFI:T:";
+  qrDataWifi += (wifiPassword.length() > 0) ? "WPA" : "nopass";
+  qrDataWifi += ";S:" + actualSSID + ";";
   if (wifiPassword.length() > 0) {
-    qrData += "P:" + wifiPassword + ";";
+    qrDataWifi += "P:" + wifiPassword + ";";
   }
-  qrData += ";";
+  qrDataWifi += ";";
   
-  QRCode qrcode;
-  uint8_t qrcodeData[qrcode_getBufferSize(3)];
-  qrcode_initText(&qrcode, qrcodeData, 3, ECC_LOW, qrData.c_str());
+  QRCode qrcodeWifi;
+  uint8_t qrcodeDataWifi[qrcode_getBufferSize(3)];
+  qrcode_initText(&qrcodeWifi, qrcodeDataWifi, 3, ECC_LOW, qrDataWifi.c_str());
   
-  // Draw QR code (centered, larger)
-  int qrSize = 4; // 4 pixels per module
-  int qrX = (240 - (qrcode.size * qrSize)) / 2; // Center horizontally
-  int qrY = 65;
+  // Draw WiFi QR code (left side, smaller)
+  int qrSize = 3; // 3 pixels per module (smaller to fit both)
+  int qrX1 = 15; // Left position
+  int qrY = headerY;
   
-  for (uint8_t y = 0; y < qrcode.size; y++) {
-    for (uint8_t x = 0; x < qrcode.size; x++) {
-      if (qrcode_getModule(&qrcode, x, y)) {
-        tft.fillRect(qrX + x * qrSize, qrY + y * qrSize, qrSize, qrSize, TFT_WHITE);
+  // White border for WiFi QR
+  tft.fillRect(qrX1 - 4, qrY - 4, qrcodeWifi.size * qrSize + 8, qrcodeWifi.size * qrSize + 8, TFT_WHITE);
+  tft.fillRect(qrX1 - 2, qrY - 2, qrcodeWifi.size * qrSize + 4, qrcodeWifi.size * qrSize + 4, TFT_BLACK);
+  
+  for (uint8_t y = 0; y < qrcodeWifi.size; y++) {
+    for (uint8_t x = 0; x < qrcodeWifi.size; x++) {
+      if (qrcode_getModule(&qrcodeWifi, x, y)) {
+        tft.fillRect(qrX1 + x * qrSize, qrY + y * qrSize, qrSize, qrSize, TFT_WHITE);
       }
     }
   }
   
-  int nextY = qrY + (qrcode.size * qrSize) + 10;
-  
-  // WiFi info below QR
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setTextSize(1);
-  tft.setCursor(10, nextY);
-  tft.println("2. Open browser, go to:");
-  
+  // ========== QR CODE 2: URL ==========
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.setTextSize(2);
-  tft.setCursor(30, nextY + 15);
-  tft.println("play.local");
+  tft.setTextSize(1);
+  int labelY = headerY - 17; // Align with first label (before spacing was added)
+  tft.setCursor(135, labelY);
+  tft.println("2. Open URL");
   
-  nextY += 40;
+  // Generate URL QR code
+  String qrDataURL = "http://" + hostname + ".local";
   
-  // Network details
-  tft.drawLine(10, nextY, 230, nextY, TFT_CYAN);
-  nextY += 5;
+  QRCode qrcodeURL;
+  uint8_t qrcodeDataURL[qrcode_getBufferSize(3)];
+  qrcode_initText(&qrcodeURL, qrcodeDataURL, 3, ECC_LOW, qrDataURL.c_str());
   
+  // Draw URL QR code (right side)
+  int qrX2 = 135; // Right position
+  
+  // White border for URL QR
+  tft.fillRect(qrX2 - 4, qrY - 4, qrcodeURL.size * qrSize + 8, qrcodeURL.size * qrSize + 8, TFT_WHITE);
+  tft.fillRect(qrX2 - 2, qrY - 2, qrcodeURL.size * qrSize + 4, qrcodeURL.size * qrSize + 4, TFT_BLACK);
+  
+  for (uint8_t y = 0; y < qrcodeURL.size; y++) {
+    for (uint8_t x = 0; x < qrcodeURL.size; x++) {
+      if (qrcode_getModule(&qrcodeURL, x, y)) {
+        tft.fillRect(qrX2 + x * qrSize, qrY + y * qrSize, qrSize, qrSize, TFT_WHITE);
+      }
+    }
+  }
+  
+  int nextY = qrY + (qrcodeWifi.size * qrSize) + 8;
+  
+  // WiFi details under left QR code
   tft.setTextColor(TFT_YELLOW, TFT_BLACK);
   tft.setTextSize(1);
-  tft.setCursor(10, nextY);
-  tft.println("Network Details:");
-  nextY += 12;
+  tft.setCursor(15, nextY);
+  tft.println("SSID:");
   
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setCursor(10, nextY);
-  tft.print("SSID: ");
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  
-  // Truncate SSID if too long
+  tft.setCursor(15, nextY + 10);
   String displaySSID = actualSSID;
-  if (displaySSID.length() > 20) {
-    displaySSID = displaySSID.substring(0, 17) + "...";
+  if (displaySSID.length() > 15) {
+    displaySSID = displaySSID.substring(0, 13) + "..";
   }
   tft.println(displaySSID);
-  nextY += 12;
   
+  // Only show password line if there is one
   if (wifiPassword.length() > 0) {
+    tft.setTextColor(TFT_YELLOW, TFT_BLACK);
+    tft.setCursor(15, nextY + 20);
+    tft.println("Password:");
     tft.setTextColor(TFT_WHITE, TFT_BLACK);
-    tft.setCursor(10, nextY);
-    tft.print("Pass: ");
-    tft.setTextColor(TFT_CYAN, TFT_BLACK);
-    tft.println("***");
-    nextY += 12;
-  } else {
-    tft.setTextColor(TFT_GREEN, TFT_BLACK);
-    tft.setCursor(10, nextY);
-    tft.println("(Open Network)");
-    nextY += 12;
+    tft.setCursor(15, nextY + 30);
+    String displayPass = wifiPassword;
+    if (displayPass.length() > 15) {
+      displayPass = displayPass.substring(0, 13) + "..";
+    }
+    tft.println(displayPass);
   }
   
-  tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setCursor(10, nextY);
-  tft.print("IP: ");
-  tft.setTextColor(TFT_CYAN, TFT_BLACK);
-  tft.println(WiFi.softAPIP().toString());
-  
-  // Footer status
-  nextY = 295;
+  // URL details under right QR code
   tft.setTextColor(TFT_GREEN, TFT_BLACK);
-  tft.setTextSize(1);
-  tft.setCursor(10, nextY);
-  tft.println("Status: READY");
-  
+  tft.setCursor(135, nextY);
+  tft.println("URL:");
   tft.setTextColor(TFT_WHITE, TFT_BLACK);
-  tft.setCursor(10, nextY + 12);
-  tft.print("Tap screen for stats");
+  tft.setCursor(135, nextY + 10);
+  String displayURL = hostname + ".local";
+  if (displayURL.length() > 15) {
+    displayURL = displayURL.substring(0, 13) + "..";
+  }
+  tft.println(displayURL);
 }
 
 // Show system stats screen
@@ -722,6 +792,7 @@ void webSocketEvent(uint8_t clientNum, WStype_t type, uint8_t * payload, size_t 
 // Setup web server routes
 void setupWebServer() {
   // Captive portal detection endpoints - redirect to test page
+  /*
   webServer.on("/generate_204", []() { // Android
     webServer.sendHeader("Location", "http://play.local/test.html", true);
     webServer.send(302, "text/plain", "");
@@ -736,7 +807,7 @@ void setupWebServer() {
     webServer.sendHeader("Location", "http://play.local/test.html", true);
     webServer.send(302, "text/plain", "");
   });
-  
+  */
   // Handle all other requests with file serving
   webServer.onNotFound(handleFileRequest);
   

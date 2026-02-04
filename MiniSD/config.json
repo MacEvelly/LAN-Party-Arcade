@@ -1,5 +1,7 @@
 {
-  "wifiSSID": "LAN_Party_SD",
-  "wifiPassword": "",
+  "wifiSSID": "LAN_Poo_SD",
+  "wifiPassword": "Fart1234",
+  "hostname": "Poop",
+  "headerBMP": "Header.bmp",
   "maxConnections": 20
 }

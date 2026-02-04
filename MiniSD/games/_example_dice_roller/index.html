@@ -1,0 +1,236 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Dice Roller - Example Game</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            display: flex;
+            align-items: center;
+            justify-content: center;
+            padding: 20px;
+            color: white;
+        }
+        
+        .container {
+            max-width: 500px;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 40px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+            text-align: center;
+        }
+        
+        h1 {
+            font-size: 2.5em;
+            margin-bottom: 30px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .dice {
+            font-size: 8em;
+            margin: 30px 0;
+            transition: transform 0.3s;
+        }
+        
+        .dice.rolling {
+            animation: shake 0.5s infinite;
+        }
+        
+        @keyframes shake {
+            0%, 100% { transform: rotate(0deg); }
+            25% { transform: rotate(-10deg); }
+            75% { transform: rotate(10deg); }
+        }
+        
+        button {
+            padding: 15px 40px;
+            font-size: 1.2em;
+            font-weight: bold;
+            border: none;
+            border-radius: 10px;
+            background: rgba(0, 255, 0, 0.8);
+            color: black;
+            cursor: pointer;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: rgba(0, 255, 0, 1);
+            transform: scale(1.05);
+        }
+        
+        button:disabled {
+            background: rgba(128, 128, 128, 0.5);
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .info {
+            margin-top: 20px;
+            font-size: 0.9em;
+            opacity: 0.8;
+        }
+        
+        .status {
+            padding: 10px;
+            border-radius: 5px;
+            margin-bottom: 20px;
+            font-size: 0.9em;
+        }
+        
+        .status.connected {
+            background: rgba(0, 255, 0, 0.2);
+            border: 1px solid #00ff00;
+        }
+        
+        .status.disconnected {
+            background: rgba(255, 0, 0, 0.2);
+            border: 1px solid #ff0000;
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎲 Dice Roller</h1>
+        
+        <div id="status" class="status disconnected">
+            WebSocket: Disconnected
+        </div>
+        
+        <div id="dice" class="dice">🎲</div>
+        
+        <button id="rollBtn" onclick="rollDice()">Roll Dice!</button>
+        
+        <div class="info">
+            <p><strong>Your Roll:</strong> <span id="yourRoll">-</span></p>
+            <p><strong>Last Broadcast:</strong> <span id="lastBroadcast">-</span></p>
+        </div>
+        
+        <div style="margin-top: 30px; opacity: 0.7; font-size: 0.85em;">
+            <p>Example multiplayer game template</p>
+            <p>Open on multiple devices to see rolls sync</p>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        let uuid = '';
+        const diceEmojis = ['⚀', '⚁', '⚂', '⚃', '⚄', '⚅'];
+        
+        // Generate UUID
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+        
+        // Get or create UUID
+        uuid = sessionStorage.getItem('playerUUID');
+        if (!uuid) {
+            uuid = generateUUID();
+            sessionStorage.setItem('playerUUID', uuid);
+        }
+        
+        // Connect to WebSocket
+        function connectWebSocket() {
+            const wsUrl = `ws://${window.location.hostname}:81`;
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = function() {
+                document.getElementById('status').className = 'status connected';
+                document.getElementById('status').textContent = 'WebSocket: Connected ✓';
+                
+                // Send init message
+                ws.send(JSON.stringify({
+                    type: 'init',
+                    uuid: uuid,
+                    game: 'dice_roller',
+                    timestamp: Date.now()
+                }));
+            };
+            
+            ws.onmessage = function(event) {
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    // Show rolls from other players
+                    if (data.type === 'dice_roll' && data.uuid !== uuid) {
+                        document.getElementById('lastBroadcast').textContent = 
+                            `Player rolled ${data.result} ${diceEmojis[data.result - 1]}`;
+                    }
+                } catch (e) {
+                    console.error('Failed to parse message:', e);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onclose = function() {
+                document.getElementById('status').className = 'status disconnected';
+                document.getElementById('status').textContent = 'WebSocket: Disconnected';
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+        
+        // Roll dice
+        function rollDice() {
+            const diceEl = document.getElementById('dice');
+            const rollBtn = document.getElementById('rollBtn');
+            
+            // Disable button and add rolling animation
+            rollBtn.disabled = true;
+            diceEl.classList.add('rolling');
+            
+            // Animate for 1 second
+            let counter = 0;
+            const interval = setInterval(() => {
+                diceEl.textContent = diceEmojis[Math.floor(Math.random() * 6)];
+                counter++;
+                
+                if (counter > 10) {
+                    clearInterval(interval);
+                    
+                    // Final roll
+                    const result = Math.floor(Math.random() * 6) + 1;
+                    diceEl.textContent = diceEmojis[result - 1];
+                    diceEl.classList.remove('rolling');
+                    
+                    // Update display
+                    document.getElementById('yourRoll').textContent = result;
+                    
+                    // Broadcast to other players
+                    if (ws && ws.readyState === WebSocket.OPEN) {
+                        ws.send(JSON.stringify({
+                            type: 'dice_roll',
+                            uuid: uuid,
+                            result: result,
+                            timestamp: Date.now()
+                        }));
+                    }
+                    
+                    rollBtn.disabled = false;
+                }
+            }, 100);
+        }
+        
+        // Connect on load
+        connectWebSocket();
+    </script>
+</body>
+</html>
