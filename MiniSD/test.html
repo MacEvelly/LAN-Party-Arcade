@@ -1,0 +1,357 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>WebSocket Test - LAN Party Arcade</title>
+    <style>
+        * {
+            margin: 0;
+            padding: 0;
+            box-sizing: border-box;
+        }
+        
+        body {
+            font-family: 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background: linear-gradient(135deg, #667eea 0%, #764ba2 100%);
+            min-height: 100vh;
+            padding: 20px;
+            color: white;
+        }
+        
+        .container {
+            max-width: 800px;
+            margin: 0 auto;
+            background: rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+            border-radius: 20px;
+            padding: 30px;
+            box-shadow: 0 8px 32px rgba(0, 0, 0, 0.3);
+        }
+        
+        h1 {
+            text-align: center;
+            margin-bottom: 20px;
+            text-shadow: 2px 2px 4px rgba(0, 0, 0, 0.3);
+        }
+        
+        .status {
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+            text-align: center;
+            font-weight: bold;
+        }
+        
+        .status.disconnected {
+            background: rgba(255, 0, 0, 0.3);
+            border: 2px solid #ff0000;
+        }
+        
+        .status.connected {
+            background: rgba(0, 255, 0, 0.3);
+            border: 2px solid #00ff00;
+        }
+        
+        .info {
+            background: rgba(255, 255, 255, 0.1);
+            padding: 15px;
+            border-radius: 10px;
+            margin-bottom: 20px;
+        }
+        
+        .info p {
+            margin: 5px 0;
+            font-size: 0.9em;
+        }
+        
+        .messages {
+            background: rgba(0, 0, 0, 0.3);
+            border-radius: 10px;
+            padding: 15px;
+            height: 300px;
+            overflow-y: auto;
+            margin-bottom: 20px;
+            font-family: 'Courier New', monospace;
+            font-size: 0.9em;
+        }
+        
+        .message {
+            margin: 5px 0;
+            padding: 8px;
+            border-radius: 5px;
+        }
+        
+        .message.sent {
+            background: rgba(0, 100, 255, 0.3);
+            border-left: 3px solid #0064ff;
+        }
+        
+        .message.received {
+            background: rgba(0, 255, 100, 0.3);
+            border-left: 3px solid #00ff64;
+        }
+        
+        .message.system {
+            background: rgba(255, 255, 0, 0.2);
+            border-left: 3px solid #ffff00;
+            font-style: italic;
+        }
+        
+        .controls {
+            display: flex;
+            gap: 10px;
+            margin-bottom: 20px;
+        }
+        
+        input {
+            flex: 1;
+            padding: 12px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            background: rgba(255, 255, 255, 0.9);
+        }
+        
+        button {
+            padding: 12px 24px;
+            border: none;
+            border-radius: 10px;
+            font-size: 1em;
+            font-weight: bold;
+            cursor: pointer;
+            background: rgba(0, 255, 0, 0.8);
+            color: black;
+            transition: all 0.3s;
+        }
+        
+        button:hover {
+            background: rgba(0, 255, 0, 1);
+            transform: scale(1.05);
+        }
+        
+        button:disabled {
+            background: rgba(128, 128, 128, 0.5);
+            cursor: not-allowed;
+            transform: none;
+        }
+        
+        .test-buttons {
+            display: grid;
+            grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+            gap: 10px;
+        }
+        
+        .test-buttons button {
+            background: rgba(100, 100, 255, 0.8);
+        }
+        
+        .test-buttons button:hover {
+            background: rgba(100, 100, 255, 1);
+        }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>🎮 WebSocket Relay Test</h1>
+        
+        <div id="status" class="status disconnected">
+            ⚫ Disconnected
+        </div>
+        
+        <div class="info">
+            <p><strong>Your UUID:</strong> <span id="uuid">Generating...</span></p>
+            <p><strong>Client #:</strong> <span id="clientNum">-</span></p>
+            <p><strong>Messages Sent:</strong> <span id="sentCount">0</span></p>
+            <p><strong>Messages Received:</strong> <span id="receivedCount">0</span></p>
+        </div>
+        
+        <div id="messages" class="messages">
+            <div class="message system">Connecting to WebSocket server...</div>
+        </div>
+        
+        <div class="controls">
+            <input type="text" id="messageInput" placeholder="Type a message..." disabled>
+            <button id="sendBtn" onclick="sendMessage()" disabled>Send</button>
+        </div>
+        
+        <div class="test-buttons">
+            <button onclick="sendTestMessage('hello')" id="testBtn1" disabled>Test: Hello</button>
+            <button onclick="sendTestMessage('ping')" id="testBtn2" disabled>Test: Ping</button>
+            <button onclick="sendTestMessage('action')" id="testBtn3" disabled>Test: Action</button>
+            <button onclick="clearMessages()">Clear Log</button>
+        </div>
+        
+        <div style="margin-top: 20px; text-align: center; opacity: 0.7; font-size: 0.9em;">
+            <p>Open this page in multiple tabs to test message relay!</p>
+            <p>Messages sent from one tab should appear in all other tabs.</p>
+        </div>
+    </div>
+    
+    <script>
+        let ws = null;
+        let uuid = '';
+        let clientNum = null;
+        let sentCount = 0;
+        let receivedCount = 0;
+        
+        // Generate UUID
+        function generateUUID() {
+            return 'xxxxxxxx-xxxx-4xxx-yxxx-xxxxxxxxxxxx'.replace(/[xy]/g, function(c) {
+                const r = Math.random() * 16 | 0;
+                const v = c == 'x' ? r : (r & 0x3 | 0x8);
+                return v.toString(16);
+            });
+        }
+        
+        // Get or create UUID in sessionStorage
+        uuid = sessionStorage.getItem('playerUUID');
+        if (!uuid) {
+            uuid = generateUUID();
+            sessionStorage.setItem('playerUUID', uuid);
+        }
+        document.getElementById('uuid').textContent = uuid;
+        
+        // Connect to WebSocket
+        function connectWebSocket() {
+            const wsUrl = `ws://${window.location.hostname}:81`;
+            addMessage('system', `Connecting to ${wsUrl}...`);
+            
+            ws = new WebSocket(wsUrl);
+            
+            ws.onopen = function() {
+                addMessage('system', '✅ Connected to WebSocket server!');
+                document.getElementById('status').className = 'status connected';
+                document.getElementById('status').innerHTML = '🟢 Connected';
+                
+                // Enable controls
+                document.getElementById('messageInput').disabled = false;
+                document.getElementById('sendBtn').disabled = false;
+                document.getElementById('testBtn1').disabled = false;
+                document.getElementById('testBtn2').disabled = false;
+                document.getElementById('testBtn3').disabled = false;
+                
+                // Send initial message with UUID
+                const initMessage = {
+                    type: 'init',
+                    uuid: uuid,
+                    timestamp: Date.now()
+                };
+                ws.send(JSON.stringify(initMessage));
+            };
+            
+            ws.onmessage = function(event) {
+                receivedCount++;
+                document.getElementById('receivedCount').textContent = receivedCount;
+                
+                try {
+                    const data = JSON.parse(event.data);
+                    
+                    if (data.type === 'connected') {
+                        clientNum = data.clientNum;
+                        document.getElementById('clientNum').textContent = clientNum;
+                        addMessage('system', `Assigned as Client #${clientNum}`);
+                    } else {
+                        addMessage('received', event.data);
+                    }
+                } catch (e) {
+                    // Not JSON, just display raw
+                    addMessage('received', event.data);
+                }
+            };
+            
+            ws.onerror = function(error) {
+                addMessage('system', '❌ WebSocket error!');
+                console.error('WebSocket error:', error);
+            };
+            
+            ws.onclose = function() {
+                addMessage('system', '⚫ Disconnected from server');
+                document.getElementById('status').className = 'status disconnected';
+                document.getElementById('status').innerHTML = '⚫ Disconnected';
+                
+                // Disable controls
+                document.getElementById('messageInput').disabled = true;
+                document.getElementById('sendBtn').disabled = true;
+                document.getElementById('testBtn1').disabled = true;
+                document.getElementById('testBtn2').disabled = true;
+                document.getElementById('testBtn3').disabled = true;
+                
+                // Try to reconnect after 3 seconds
+                setTimeout(connectWebSocket, 3000);
+            };
+        }
+        
+        // Send message
+        function sendMessage() {
+            const input = document.getElementById('messageInput');
+            const text = input.value.trim();
+            
+            if (text && ws && ws.readyState === WebSocket.OPEN) {
+                const message = {
+                    uuid: uuid,
+                    type: 'chat',
+                    text: text,
+                    timestamp: Date.now()
+                };
+                
+                const json = JSON.stringify(message);
+                ws.send(json);
+                
+                sentCount++;
+                document.getElementById('sentCount').textContent = sentCount;
+                addMessage('sent', json);
+                
+                input.value = '';
+            }
+        }
+        
+        // Send test message
+        function sendTestMessage(type) {
+            if (ws && ws.readyState === WebSocket.OPEN) {
+                const message = {
+                    uuid: uuid,
+                    type: type,
+                    text: `Test message: ${type}`,
+                    timestamp: Date.now()
+                };
+                
+                const json = JSON.stringify(message);
+                ws.send(json);
+                
+                sentCount++;
+                document.getElementById('sentCount').textContent = sentCount;
+                addMessage('sent', json);
+            }
+        }
+        
+        // Add message to display
+        function addMessage(type, text) {
+            const messagesDiv = document.getElementById('messages');
+            const messageDiv = document.createElement('div');
+            messageDiv.className = `message ${type}`;
+            
+            const timestamp = new Date().toLocaleTimeString();
+            messageDiv.textContent = `[${timestamp}] ${text}`;
+            
+            messagesDiv.appendChild(messageDiv);
+            messagesDiv.scrollTop = messagesDiv.scrollHeight;
+        }
+        
+        // Clear messages
+        function clearMessages() {
+            document.getElementById('messages').innerHTML = '';
+        }
+        
+        // Handle Enter key
+        document.getElementById('messageInput').addEventListener('keypress', function(e) {
+            if (e.key === 'Enter') {
+                sendMessage();
+            }
+        });
+        
+        // Connect on page load
+        connectWebSocket();
+    </script>
+</body>
+</html>
