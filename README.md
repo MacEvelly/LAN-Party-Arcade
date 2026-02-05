@@ -1,5 +1,5 @@
-<p align="center">
-   <img src="docs/images/LanPartyArcade.png" style="border-radius: 25px; height: 200px; width: auto;" alt="LAN Party Arcade" />
+<p align="center" style="background-color: #040014;">
+<img src="docs/images/LanPartyArcade.png" style="border-radius: 25px; height: 200px; width: auto;" alt="LAN Party Arcade" />
 </p>
 
 # 🎮 LAN Party Arcade
