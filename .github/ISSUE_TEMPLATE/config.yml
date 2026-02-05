@@ -1,0 +1,8 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Documentation
+    url: https://github.com/YOUR_USERNAME/LAN-Party-Arcade/tree/main/docs
+    about: Check the docs folder for technical documentation
+  - name: Discussions
+    url: https://github.com/YOUR_USERNAME/LAN-Party-Arcade/discussions
+    about: Ask questions and discuss ideas with the community
